@@ -952,6 +952,15 @@ impl ResourceType {
     pub(crate) fn is_instantiated(&self) -> bool {
         !matches!(&self.kind, ResourceKindValue::Abstract { .. })
     }
+
+    /// Returns the id of this resource
+    pub fn id(&self) -> u64 {
+        match &self.kind {
+            ResourceKindValue::Abstract { id, .. } => *id as u64,
+            ResourceKindValue::Instantiated { id, .. } => *id as u64,
+            ResourceKindValue::Host { resource_id, .. } => *resource_id,
+        }
+    }
 }
 
 impl Hash for ResourceType {
