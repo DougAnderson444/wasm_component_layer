@@ -1204,7 +1204,11 @@ impl FuncType {
     /// Returns `Ok` if the number and types of items in `results` matches as expected by the [`FuncType`].
     pub(crate) fn match_results(&self, results: &[crate::values::Value]) -> Result<()> {
         if self.results().len() != results.len() {
-            bail!("Incorrect result length.");
+            bail!(format!(
+                "Incorrect result length, expected: {}, got: {}",
+                self.results().len(),
+                results.len()
+            ));
         }
         if self
             .results()
@@ -1212,7 +1216,11 @@ impl FuncType {
             .cloned()
             .ne(results.iter().map(crate::values::Value::ty))
         {
-            bail!("Incorrect result types.");
+            bail!(format!(
+                "Incorrect result types, expected: {:?}, got: {:?}",
+                self.results(),
+                results.iter().map(crate::values::Value::ty)
+            ));
         }
         Ok(())
     }
