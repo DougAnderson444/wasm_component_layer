@@ -852,7 +852,11 @@ impl ResourceOwn {
                 .get(self.rep as usize)
                 .expect("Resource was not present.")
                 .downcast_ref()
-                .context("Resource was not of requested type.")
+                .context(format!(
+                    "Resource was not of requested type, expected {:?}, found {:?}",
+                    std::any::type_name::<T>(),
+                    std::any::type_name::<dyn Any>()
+                ))
         } else {
             bail!("Cannot get the representation for a guest-owned resource.");
         }
@@ -879,7 +883,11 @@ impl ResourceOwn {
                 .get_mut(self.rep as usize)
                 .expect("Resource was not present.")
                 .downcast_mut()
-                .context("Resource was not of requested type.")
+                .context(format!(
+                    "Resource was not of requested type, expected {:?}, found {:?}",
+                    std::any::type_name::<T>(),
+                    std::any::type_name::<dyn Any>()
+                ))
         } else {
             bail!("Cannot get the representation for a guest-owned resource.");
         }
@@ -1038,7 +1046,11 @@ impl ResourceBorrow {
                 .get(self.rep as usize)
                 .expect("Resource was not present.")
                 .downcast_ref()
-                .context("Resource was not of requested type.")
+                .context(format!(
+                    "Resource was not of requested type, expected {:?}, found {:?}",
+                    std::any::type_name::<T>(),
+                    std::any::type_name::<dyn Any>()
+                ))
         } else {
             bail!("Cannot get the representation for a guest-owned resource.");
         }
@@ -1065,7 +1077,11 @@ impl ResourceBorrow {
                 .get_mut(self.rep as usize)
                 .expect("Resource was not present.")
                 .downcast_mut()
-                .context("Resource was not of requested type.")
+                .context(format!(
+                    "Resource was not of requested type, expected {:?}, found {:?}",
+                    std::any::type_name::<T>(),
+                    std::any::type_name::<dyn Any>()
+                ))
         } else {
             bail!("Cannot get the representation for a guest-owned resource.");
         }
@@ -1775,7 +1791,7 @@ mod private {
         Other(std::slice::Iter<'a, Value>),
     }
 
-    impl<'a> Iterator for ListSpecializationIter<'a> {
+    impl Iterator for ListSpecializationIter<'_> {
         type Item = Value;
 
         fn next(&mut self) -> Option<Self::Item> {
