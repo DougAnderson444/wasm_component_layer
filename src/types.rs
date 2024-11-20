@@ -888,7 +888,7 @@ impl ResourceType {
     }
 
     /// Determines whether this resource type is owned by the specified instance.
-    pub(crate) fn is_owned_by_instance(&self, instance: u64) -> bool {
+    pub fn is_owned_by_instance(&self, instance: u64) -> bool {
         if let ResourceKindValue::Instantiated { instance: a, .. } = &self.kind {
             instance == *a
         } else {
