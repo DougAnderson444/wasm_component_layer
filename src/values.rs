@@ -13,10 +13,12 @@ use private::*;
 #[cfg(feature = "serde")]
 use serde::*;
 
+use crate::cond_send::CondSync;
 use crate::require_matches::require_matches;
 use crate::types::*;
 use crate::AsContext;
 use crate::AsContextMut;
+use crate::RefCtStr;
 use crate::TypeIdentifier;
 
 /// Represents a component model type.
@@ -48,7 +50,7 @@ pub enum Value {
     /// A UTF-8 character.
     Char(char),
     /// A string.
-    String(Arc<str>),
+    String(RefCtStr),
     /// A homogenous list of elements.
     List(List),
     /// A record with heterogenous fields.
@@ -294,7 +296,7 @@ impl<T: ListPrimitive> From<Arc<[T]>> for List {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Record {
     /// The internal set of keys and values, ordered lexicographically.
-    fields: Arc<[(Arc<str>, Value)]>,
+    fields: Arc<[(RefCtStr, Value)]>,
     /// The type of this record.
     ty: RecordType,
 }
@@ -302,13 +304,13 @@ pub struct Record {
 impl Record {
     /// Creates a new record out of the given fields. Each field must match with
     /// the type given in the `RecordType`.
-    pub fn new<S: Into<Arc<str>>>(
+    pub fn new<S: Into<RefCtStr>>(
         ty: RecordType,
         values: impl IntoIterator<Item = (S, Value)>,
     ) -> Result<Self> {
         let mut to_sort = values
             .into_iter()
-            .map(|(name, val)| (Into::<Arc<str>>::into(name), val))
+            .map(|(name, val)| (Into::<RefCtStr>::into(name), val))
             .collect::<Arc<_>>();
         Arc::get_mut(&mut to_sort)
             .expect("Could not get exclusive reference.")
@@ -333,13 +335,13 @@ impl Record {
     }
 
     /// Constructs a record from the provided fields, dynamically determining the type.
-    pub fn from_fields<S: Into<Arc<str>>>(
+    pub fn from_fields<S: Into<RefCtStr>>(
         name: Option<TypeIdentifier>,
         values: impl IntoIterator<Item = (S, Value)>,
     ) -> Result<Self> {
         let mut fields = values
             .into_iter()
-            .map(|(name, val)| (Into::<Arc<str>>::into(name), val))
+            .map(|(name, val)| (Into::<RefCtStr>::into(name), val))
             .collect::<Arc<_>>();
         Arc::get_mut(&mut fields)
             .expect("Could not get exclusive reference.")
@@ -373,7 +375,7 @@ impl Record {
     /// Creates a new record from the already-sorted list of values.
     pub(crate) fn from_sorted(
         ty: RecordType,
-        values: impl IntoIterator<Item = (Arc<str>, Value)>,
+        values: impl IntoIterator<Item = (RefCtStr, Value)>,
     ) -> Self {
         Self {
             fields: values.into_iter().collect(),
@@ -764,7 +766,7 @@ pub struct ResourceOwn {
 
 impl ResourceOwn {
     /// Creates a new resource for the given value. The value must match the resource type, which must be a host resource type.
-    pub fn new<T: 'static + Send + Sync + Sized>(
+    pub fn new<T: 'static + CondSync + Sized>(
         mut ctx: impl AsContextMut,
         value: T,
         ty: ResourceType,
@@ -832,7 +834,7 @@ impl ResourceOwn {
     }
 
     /// Gets the internal representation of this resource. Fails if this is not a host resource, or if the resource was already dropped.
-    pub fn rep<'a, T: 'static + Send + Sync, S, E: wasm_runtime_layer::backend::WasmEngine>(
+    pub fn rep<'a, T: 'static + CondSync, S, E: wasm_runtime_layer::backend::WasmEngine>(
         &self,
         ctx: &'a crate::StoreContext<S, E>,
     ) -> Result<&'a T> {
@@ -859,7 +861,7 @@ impl ResourceOwn {
     }
 
     /// Gets the internal mut representation of this resource. Fails if this is not a host resource, or if the resource was already dropped.
-    pub fn rep_mut<'a, T: 'static + Send + Sync, S, E: wasm_runtime_layer::backend::WasmEngine>(
+    pub fn rep_mut<'a, T: 'static + CondSync, S, E: wasm_runtime_layer::backend::WasmEngine>(
         &self,
         ctx: &'a mut crate::StoreContextMut<S, E>,
     ) -> Result<&'a mut T> {
@@ -892,7 +894,7 @@ impl ResourceOwn {
 
     /// Removes this resource from the context without invoking the destructor, and returns the value.
     /// Fails if this is not a host resource, or if the resource is borrowed.
-    pub fn take<T: 'static + Send + Sync>(&self, mut ctx: impl crate::AsContextMut) -> Result<()> {
+    pub fn take<T: 'static + CondSync>(&self, mut ctx: impl crate::AsContextMut) -> Result<()> {
         ensure!(
             self.store_id == ctx.as_context().inner.data().id,
             "Incorrect store."
@@ -1018,7 +1020,7 @@ impl ResourceBorrow {
     }
 
     /// Gets the internal representation of this resource. Fails if this is not a host resource, or if the resource was already dropped.
-    pub fn rep<'a, T: 'static + Send + Sync, S, E: wasm_runtime_layer::backend::WasmEngine>(
+    pub fn rep<'a, T: 'static + CondSync, S, E: wasm_runtime_layer::backend::WasmEngine>(
         &self,
         ctx: &'a crate::StoreContext<S, E>,
     ) -> Result<&'a T> {
@@ -1045,7 +1047,7 @@ impl ResourceBorrow {
     }
 
     /// Gets the internal mut representation of this resource. Fails if this is not a host resource, or if the resource was already dropped.
-    pub fn rep_mut<'a, T: 'static + Send + Sync, S, E: wasm_runtime_layer::backend::WasmEngine>(
+    pub fn rep_mut<'a, T: 'static + CondSync, S, E: wasm_runtime_layer::backend::WasmEngine>(
         &self,
         ctx: &'a mut crate::StoreContextMut<S, E>,
     ) -> Result<&'a mut T> {
@@ -1202,7 +1204,7 @@ impl ComponentType for Box<str> {
     }
 }
 
-impl ComponentType for Arc<str> {
+impl ComponentType for RefCtStr {
     fn ty() -> ValueType {
         ValueType::String
     }
@@ -1631,7 +1633,7 @@ impl_unary!(
     [] char,
     [] String,
     [] Box<str>,
-    [] Arc<str>,
+    [] RefCtStr,
     [T: ComponentType] Option<T>,
     [T: ComponentType] Box<T>,
     [T: ComponentType] Vec<T>,
@@ -1775,7 +1777,7 @@ mod private {
         Other(std::slice::Iter<'a, Value>),
     }
 
-    impl<'a> Iterator for ListSpecializationIter<'a> {
+    impl Iterator for ListSpecializationIter<'_> {
         type Item = Value;
 
         fn next(&mut self) -> Option<Self::Item> {

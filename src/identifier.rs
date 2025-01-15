@@ -1,23 +1,23 @@
-use std::sync::*;
-
 use anyhow::*;
 #[cfg(feature = "serde")]
 use serde::*;
 use wit_parser::*;
+
+use crate::RefCtStr;
 
 /// Describes the name of a component type.
 #[derive(Clone, Hash, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct TypeIdentifier {
     /// The name of the type.
-    name: Arc<str>,
+    name: RefCtStr,
     /// The interface in which the type was defined, if any.
     interface: Option<InterfaceIdentifier>,
 }
 
 impl TypeIdentifier {
     /// Creates a new type identifier for the given name and interface.
-    pub fn new(name: impl Into<Arc<str>>, interface: Option<InterfaceIdentifier>) -> Self {
+    pub fn new(name: impl Into<RefCtStr>, interface: Option<InterfaceIdentifier>) -> Self {
         Self {
             name: name.into(),
             interface,
@@ -56,14 +56,14 @@ impl std::fmt::Display for TypeIdentifier {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct PackageName {
     /// The namespace of the package.
-    namespace: Arc<str>,
+    namespace: RefCtStr,
     /// The name of the package.
-    name: Arc<str>,
+    name: RefCtStr,
 }
 
 impl PackageName {
     /// Creates a new package identifier for the given namespace and name.
-    pub fn new(namespace: impl Into<Arc<str>>, name: impl Into<Arc<str>>) -> Self {
+    pub fn new(namespace: impl Into<RefCtStr>, name: impl Into<RefCtStr>) -> Self {
         Self {
             name: name.into(),
             namespace: namespace.into(),
@@ -205,12 +205,12 @@ pub struct InterfaceIdentifier {
     /// The package ID.
     package: PackageIdentifier,
     /// The name of the interface.
-    name: Arc<str>,
+    name: RefCtStr,
 }
 
 impl InterfaceIdentifier {
     /// Creates a new interface identifier for the given name and package.
-    pub fn new(package: PackageIdentifier, name: impl Into<Arc<str>>) -> Self {
+    pub fn new(package: PackageIdentifier, name: impl Into<RefCtStr>) -> Self {
         Self {
             package,
             name: name.into(),

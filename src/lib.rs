@@ -87,6 +87,12 @@
 /// Implements the Canonical ABI conventions for converting between guest and host types.
 mod abi;
 
+/// Utilities for conditionally bounding Send and Sync based on target architecture.
+mod cond_send;
+
+/// Crate errors
+mod error;
+
 /// Provides the ability to create and call component model functions.
 mod func;
 
@@ -126,6 +132,12 @@ pub use crate::types::*;
 pub use crate::types::{FuncType, ValueType, VariantCase};
 pub use crate::values::*;
 pub use crate::values::{Enum, Flags, Record, Tuple, Value, Variant};
+
+/// Type alias for reference counted name str, based on target architecture.
+#[cfg(not(target_arch = "wasm32"))]
+pub type RefCtStr = std::sync::Arc<str>;
+#[cfg(target_arch = "wasm32")]
+pub type RefCtStr = std::rc::Rc<str>;
 
 /// A parsed and validated WebAssembly component, which may be used to instantiate [`Instance`]s.
 #[derive(Clone, Debug)]
@@ -941,7 +953,7 @@ struct ExportTypes {
 #[derive(Debug, Default)]
 struct ExportTypesInstance {
     /// The functions in the interface.
-    functions: FxHashMap<Arc<str>, ComponentExport>,
+    functions: FxHashMap<RefCtStr, ComponentExport>,
 }
 
 /// Details a set of types within a component.
@@ -984,9 +996,9 @@ impl ComponentTypes {
 #[derive(Debug)]
 pub struct ComponentTypesInstance {
     /// The functions of the interface.
-    functions: FxHashMap<Arc<str>, crate::types::FuncType>,
+    functions: FxHashMap<RefCtStr, crate::types::FuncType>,
     /// The resources of the interface.
-    resources: FxHashMap<Arc<str>, ResourceType>,
+    resources: FxHashMap<RefCtStr, ResourceType>,
 }
 
 impl ComponentTypesInstance {
@@ -1084,9 +1096,9 @@ impl Linker {
 #[derive(Clone, Debug, Default)]
 pub struct LinkerInstance {
     /// The functions in the interface.
-    functions: FxHashMap<Arc<str>, crate::func::Func>,
+    functions: FxHashMap<RefCtStr, crate::func::Func>,
     /// The resource types in the interface.
-    resources: FxHashMap<Arc<str>, ResourceType>,
+    resources: FxHashMap<RefCtStr, ResourceType>,
 }
 
 impl LinkerInstance {
@@ -1094,10 +1106,10 @@ impl LinkerInstance {
     /// Fails if the function already exists.
     pub fn define_func(
         &mut self,
-        name: impl Into<Arc<str>>,
+        name: impl Into<RefCtStr>,
         func: crate::func::Func,
     ) -> Result<()> {
-        let n = Into::<Arc<str>>::into(name);
+        let n = Into::<RefCtStr>::into(name);
         if self.functions.contains_key(&n) {
             bail!("Duplicate function definition.");
         }
@@ -1115,7 +1127,7 @@ impl LinkerInstance {
     /// Fails if the resource type already exists, or if the resource is abstract.
     pub fn define_resource(
         &mut self,
-        name: impl Into<Arc<str>>,
+        name: impl Into<RefCtStr>,
         resource_ty: ResourceType,
     ) -> Result<()> {
         ensure!(
@@ -1123,7 +1135,7 @@ impl LinkerInstance {
             "Cannot link with abstract resource type."
         );
 
-        let n = Into::<Arc<str>>::into(name);
+        let n = Into::<RefCtStr>::into(name);
         if self.resources.contains_key(&n) {
             bail!("Duplicate resource definition.");
         }
@@ -1856,9 +1868,9 @@ impl Exports {
 #[derive(Debug)]
 pub struct ExportInstance {
     /// The functions of the interface.
-    functions: FxHashMap<Arc<str>, crate::func::Func>,
+    functions: FxHashMap<RefCtStr, crate::func::Func>,
     /// The resources of the interface.
-    resources: FxHashMap<Arc<str>, ResourceType>,
+    resources: FxHashMap<RefCtStr, ResourceType>,
     /// The instance that owns these exports.
     instance: Weak<InstanceInner>,
 }
@@ -1937,7 +1949,7 @@ struct ComponentImport {
     /// The interface from which this export originates.
     pub instance: Option<InterfaceIdentifier>,
     /// The name of the import.
-    pub name: Arc<str>,
+    pub name: RefCtStr,
     /// The function associated with the import.
     pub func: Function,
     /// The canonical options with which the import will be called.
@@ -2184,7 +2196,10 @@ struct StoreInner<T, E: backend::WasmEngine> {
     /// The table of host functions.
     pub host_functions: FuncVec<T, E>,
     /// The table of host resources.
+    #[cfg(not(target_arch = "wasm32"))]
     pub host_resources: Slab<Box<dyn Any + Send + Sync>>,
+    #[cfg(target_arch = "wasm32")]
+    pub host_resources: Slab<Box<dyn Any>>,
     /// A function that drops a host resource from this store.
     pub drop_host_resource: Option<wasm_runtime_layer::Func>,
 }

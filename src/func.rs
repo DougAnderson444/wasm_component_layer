@@ -2,9 +2,9 @@ use std::marker::*;
 use std::mem::*;
 use std::sync::atomic::*;
 use std::sync::*;
-use std::usize;
 
 use bytemuck::*;
+use cond_send::CondSync;
 use wasm_runtime_layer::*;
 #[allow(unused_imports)]
 use wasmtime_environ::component::StringEncoding;
@@ -15,13 +15,36 @@ use crate::types::{FuncType, ValueType};
 use crate::values::Value;
 use crate::{AsContext, AsContextMut, StoreContextMut, *};
 
+#[cfg(target_arch = "wasm32")]
+use std::cell::Cell;
+#[cfg(target_arch = "wasm32")]
+use std::rc::Rc;
+
+/// The return type varies depending on the target architecture.
+#[cfg(not(target_arch = "wasm32"))]
+type Usize = AtomicUsize;
+#[cfg(target_arch = "wasm32")]
+type Usize = usize;
+
+/// The return type varies depending on the target architecture.
+#[cfg(not(target_arch = "wasm32"))]
+type RefCountUsize = Arc<AtomicUsize>;
+#[cfg(target_arch = "wasm32")]
+type RefCountUsize = Rc<Cell<usize>>;
+
+/// Type alias for Reference Counted Guest Functions, depending on target architecture.
+#[cfg(not(target_arch = "wasm32"))]
+type RefCtGuestFunc = Arc<GuestFunc>;
+#[cfg(target_arch = "wasm32")]
+type RefCtGuestFunc = Rc<GuestFunc>;
+
 /// Stores the backing implementation for a function.
 #[derive(Clone, Debug)]
 pub(crate) enum FuncImpl {
     /// A function backed by a guest implementation.
-    GuestFunc(Option<crate::Instance>, Arc<GuestFunc>),
+    GuestFunc(Option<crate::Instance>, RefCtGuestFunc),
     /// A host-provided function.
-    HostFunc(Arc<AtomicUsize>),
+    HostFunc(RefCountUsize),
 }
 
 /// Stores the data necessary to call a guest function.
@@ -68,8 +91,7 @@ impl Func {
         mut ctx: C,
         ty: FuncType,
         f: impl 'static
-            + Send
-            + Sync
+            + CondSync
             + Fn(StoreContextMut<C::UserState, C::Engine>, &[Value], &mut [Value]) -> Result<()>,
     ) -> Self {
         let mut ctx_mut = ctx.as_context_mut();
@@ -154,13 +176,16 @@ impl Func {
                 .call(function)
                 .map_err(|error| FuncError {
                     name: function.name.clone(),
-                    interface: interface_id.clone(),
-                    instance: i.as_ref().expect("No instance available.").clone(),
+                    interface: format!("{:?}", interface_id),
+                    instance: format!("{:?}", i),
                     error,
                 })?)
             }
             FuncImpl::HostFunc(idx) => {
+                #[cfg(not(target_arch = "wasm32"))]
                 let callee = ctx.as_context().inner.data().host_functions.get(idx);
+                #[cfg(target_arch = "wasm32")]
+                let callee = ctx.as_context().inner.data().host_functions.get(&idx.get());
                 (callee)(ctx.as_context_mut(), arguments, results)?;
                 self.ty.match_results(results)
             }
@@ -325,7 +350,7 @@ struct FuncBindgen<'a, C: AsContextMut> {
     pub store_id: u64,
 }
 
-impl<'a, C: AsContextMut> FuncBindgen<'a, C> {
+impl<C: AsContextMut> FuncBindgen<'_, C> {
     /// Loads a type from the given offset in guest memory.
     fn load<B: Blittable>(&self, offset: usize) -> Result<B> {
         Ok(B::from_bytes(<B::Array as ByteArray>::load(
@@ -367,7 +392,7 @@ impl<'a, C: AsContextMut> FuncBindgen<'a, C> {
     }
 }
 
-impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
+impl<C: AsContextMut> Bindgen for FuncBindgen<'_, C> {
     type Operand = Value;
 
     fn emit(
@@ -1215,7 +1240,7 @@ impl<P: ComponentList, R: ComponentList> TypedFunc<P, R> {
     /// Creates a new function, wrapping the given closure.
     pub fn new<C: AsContextMut>(
         ctx: C,
-        f: impl 'static + Send + Sync + Fn(StoreContextMut<C::UserState, C::Engine>, P) -> Result<R>,
+        f: impl 'static + CondSync + Fn(StoreContextMut<C::UserState, C::Engine>, P) -> Result<R>,
     ) -> Self {
         let mut params_results = vec![ValueType::Bool; P::LEN + R::LEN];
         P::into_tys(&mut params_results[..P::LEN]);
@@ -1266,9 +1291,9 @@ pub struct FuncError {
     /// The name of the function.
     name: String,
     /// The ID of the interface associated with the function.
-    interface: Option<InterfaceIdentifier>,
+    interface: String,
     /// The instance.
-    instance: crate::Instance,
+    instance: String,
     /// The error.
     error: Error,
 }
@@ -1280,28 +1305,26 @@ impl FuncError {
     }
 
     /// Gets the instance for which this error occurred.
-    pub fn instance(&self) -> &crate::Instance {
+    pub fn instance(&self) -> &str {
         &self.instance
     }
 }
 
 impl std::fmt::Debug for FuncError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(inter) = &self.interface {
-            f.write_fmt(format_args!("in {}.{}: {:?}", inter, self.name, self.error))
-        } else {
-            f.write_fmt(format_args!("in {}: {:?}", self.name, self.error))
-        }
+        f.write_fmt(format_args!(
+            "in {}.{}: {:?}",
+            self.interface, self.name, self.error
+        ))
     }
 }
 
 impl std::fmt::Display for FuncError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(inter) = &self.interface {
-            f.write_fmt(format_args!("in {}.{}: {}", inter, self.name, self.error))
-        } else {
-            f.write_fmt(format_args!("in {}: {}", self.name, self.error))
-        }
+        f.write_fmt(format_args!(
+            "in {}.{}: {}",
+            self.interface, self.name, self.error
+        ))
     }
 }
 
@@ -1388,11 +1411,26 @@ impl<const N: usize> ByteArray for [u8; N] {
 }
 
 /// The type of a dynamic host function.
+#[cfg(not(target_arch = "wasm32"))]
 type FunctionBacking<T, E> =
     dyn 'static + Send + Sync + Fn(StoreContextMut<T, E>, &[Value], &mut [Value]) -> Result<()>;
+// target_arch must be conditional by hand here due to auto triat for trait objects.
+#[cfg(target_arch = "wasm32")]
+type FunctionBacking<T, E> =
+    dyn 'static + Fn(StoreContextMut<T, E>, &[Value], &mut [Value]) -> Result<()>;
 
 /// The type of the key used in the vector of host functions.
+#[cfg(not(target_arch = "wasm32"))]
 type FunctionBackingKeyPair<T, E> = (Arc<AtomicUsize>, Arc<FunctionBacking<T, E>>);
+/// Use Rc for wasm32 targets
+#[cfg(target_arch = "wasm32")]
+type FunctionBackingKeyPair<T, E> = (Rc<Cell<usize>>, Rc<FunctionBacking<T, E>>);
+
+/// A reference-counted function backing.
+#[cfg(not(target_arch = "wasm32"))]
+pub type RefCtFuncBacking<T, E> = Arc<FunctionBacking<T, E>>;
+#[cfg(target_arch = "wasm32")]
+pub type RefCtFuncBacking<T, E> = Rc<FunctionBacking<T, E>>;
 
 /// A vector for functions that automatically drops items when the references are dropped.
 pub(crate) struct FuncVec<T, E: backend::WasmEngine> {
@@ -1404,19 +1442,34 @@ impl<T, E: backend::WasmEngine> FuncVec<T, E> {
     /// Pushes a new function into the vector.
     pub fn push(
         &mut self,
-        f: impl 'static + Send + Sync + Fn(StoreContextMut<T, E>, &[Value], &mut [Value]) -> Result<()>,
-    ) -> Arc<AtomicUsize> {
+        f: impl 'static + CondSync + Fn(StoreContextMut<T, E>, &[Value], &mut [Value]) -> Result<()>,
+    ) -> RefCountUsize {
         if self.functions.capacity() == self.functions.len() {
             self.clear_dead_functions();
         }
-        let idx = Arc::new(AtomicUsize::new(self.functions.len()));
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let idx = Arc::new(Usize::new(self.functions.len()));
+        #[cfg(target_arch = "wasm32")]
+        let idx = Rc::new(Cell::new(self.functions.len()));
+
+        #[cfg(not(target_arch = "wasm32"))]
         self.functions.push((idx.clone(), Arc::new(f)));
+        #[cfg(target_arch = "wasm32")]
+        self.functions.push((idx.clone(), Rc::new(f)));
         idx
     }
 
     /// Gets a function from the vector.
-    pub fn get(&self, value: &AtomicUsize) -> Arc<FunctionBacking<T, E>> {
-        self.functions[value.load(Ordering::Acquire)].1.clone()
+    pub fn get(&self, value: &Usize) -> RefCtFuncBacking<T, E> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.functions[value.load(Ordering::Acquire)].1.clone()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            return self.functions[*value].1.clone();
+        }
     }
 
     /// Clears all dead functions from the vector, and doubles its capacity.
@@ -1424,8 +1477,14 @@ impl<T, E: backend::WasmEngine> FuncVec<T, E> {
         let new_len = 2 * self.functions.len();
         let old = replace(&mut self.functions, Vec::with_capacity(new_len));
         for (idx, val) in old {
+            #[cfg(not(target_arch = "wasm32"))]
             if Arc::strong_count(&idx) > 1 {
                 idx.store(self.functions.len(), Ordering::Release);
+                self.functions.push((idx, val));
+            }
+            #[cfg(target_arch = "wasm32")]
+            if idx.get() == self.functions.len() {
+                idx.set(self.functions.len());
                 self.functions.push((idx, val));
             }
         }

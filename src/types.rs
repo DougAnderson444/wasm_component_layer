@@ -10,10 +10,11 @@ use id_arena::*;
 #[cfg(feature = "serde")]
 use serde::*;
 
+use crate::cond_send::CondSync;
 use crate::values::ComponentType;
-use crate::TypeIdentifier;
 use crate::{require_matches, UnaryComponentType};
 use crate::{AsContextMut, ComponentInner, StoreContextMut};
+use crate::{RefCtStr, TypeIdentifier};
 
 /// Represents a component model interface type.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -306,21 +307,21 @@ impl ListType {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct RecordType {
     /// The fields of the record.
-    pub(crate) fields: Arc<[(usize, Arc<str>, ValueType)]>,
+    pub(crate) fields: Arc<[(usize, RefCtStr, ValueType)]>,
     /// The identifier associated with this type.
     name: Option<TypeIdentifier>,
 }
 
 impl RecordType {
     /// Creates a new record type from the given set of fields. The field names must be unique.
-    pub fn new<S: Into<Arc<str>>>(
+    pub fn new<S: Into<RefCtStr>>(
         name: Option<TypeIdentifier>,
         fields: impl IntoIterator<Item = (S, ValueType)>,
     ) -> Result<Self> {
         let mut to_sort = fields
             .into_iter()
             .enumerate()
-            .map(|(i, (name, val))| (i, Into::<Arc<str>>::into(name), val))
+            .map(|(i, (name, val))| (i, Into::<RefCtStr>::into(name), val))
             .collect::<Arc<_>>();
         Arc::get_mut(&mut to_sort)
             .expect("Could not get exclusive reference.")
@@ -360,7 +361,7 @@ impl RecordType {
     /// Creates a new record type, assuming that the fields are already sorted.
     pub(crate) fn new_sorted(
         name: Option<TypeIdentifier>,
-        fields: impl IntoIterator<Item = (Arc<str>, ValueType)>,
+        fields: impl IntoIterator<Item = (RefCtStr, ValueType)>,
     ) -> Result<Self> {
         let result = Self {
             fields: fields
@@ -392,7 +393,7 @@ impl RecordType {
             .map(|(i, x)| {
                 Ok((
                     i,
-                    Into::<Arc<str>>::into(x.name.as_str()),
+                    Into::<RefCtStr>::into(x.name.as_str()),
                     ValueType::from_component(&x.ty, component, resource_map)?,
                 ))
             })
@@ -490,14 +491,14 @@ impl Hash for TupleType {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct VariantCase {
     /// The name of this case.
-    name: Arc<str>,
+    name: RefCtStr,
     /// The type of this case's values, if any.
     ty: Option<ValueType>,
 }
 
 impl VariantCase {
     /// Creates a new variant case with the specified name and optional associated type.
-    pub fn new(name: impl Into<Arc<str>>, ty: Option<ValueType>) -> Self {
+    pub fn new(name: impl Into<RefCtStr>, ty: Option<ValueType>) -> Self {
         Self {
             name: name.into(),
             ty,
@@ -603,14 +604,14 @@ impl Hash for VariantType {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct EnumType {
     /// The cases of the enum.
-    cases: Arc<[Arc<str>]>,
+    cases: Arc<[RefCtStr]>,
     /// The name of the type.
     name: Option<TypeIdentifier>,
 }
 
 impl EnumType {
     /// Creates a new enumeration from the list of case names. The case names must be unique.
-    pub fn new<S: Into<Arc<str>>>(
+    pub fn new<S: Into<RefCtStr>>(
         name: Option<TypeIdentifier>,
         cases: impl IntoIterator<Item = S>,
     ) -> Result<Self> {
@@ -618,7 +619,7 @@ impl EnumType {
             name,
             cases: cases
                 .into_iter()
-                .map(|x| Into::<Arc<str>>::into(x))
+                .map(|x| Into::<RefCtStr>::into(x))
                 .collect(),
         };
 
@@ -717,22 +718,22 @@ impl ResultType {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct FlagsType {
     /// The names of each flags.
-    names: Arc<[Arc<str>]>,
+    names: Arc<[RefCtStr]>,
     /// A mapping from flag name to index.
-    pub(crate) indices: Arc<FxHashMap<Arc<str>, usize>>,
+    pub(crate) indices: Arc<FxHashMap<RefCtStr, usize>>,
     /// The name of the type.
     name: Option<TypeIdentifier>,
 }
 
 impl FlagsType {
     /// Creates a new flags type with the specified list of names. The names must be unique.
-    pub fn new<S: Into<Arc<str>>>(
+    pub fn new<S: Into<RefCtStr>>(
         name: Option<TypeIdentifier>,
         names: impl IntoIterator<Item = S>,
     ) -> Result<Self> {
         let names: Arc<_> = names
             .into_iter()
-            .map(|x| Into::<Arc<str>>::into(x))
+            .map(|x| Into::<RefCtStr>::into(x))
             .collect();
 
         for i in 0..names.len() {
@@ -796,9 +797,9 @@ static RESOURCE_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// Describes the type of a resource. This may either be:
 ///
 /// - An abstract guest resource, associated with a component. Abstract resources
-/// cannot be used to instantiate any values.
+///   cannot be used to instantiate any values.
 /// - An instantiated guest resource, associated with an instance. Instantiated guest
-/// resources identify resources created by WASM.
+///   resources identify resources created by WASM.
 /// - A host resource, which is associated with a native value.
 #[derive(Clone, Debug)]
 pub struct ResourceType {
@@ -811,7 +812,7 @@ pub struct ResourceType {
 impl ResourceType {
     /// Creates a new host resource for storing values of the given type. Note that multiple
     /// resource types may be created for the same `T`, and they will be distinct.
-    pub fn new<T: 'static + Send + Sync + Sized>(name: Option<TypeIdentifier>) -> Self {
+    pub fn new<T: 'static + CondSync + Sized>(name: Option<TypeIdentifier>) -> Self {
         Self {
             name,
             kind: ResourceKindValue::Host {
@@ -825,12 +826,11 @@ impl ResourceType {
     /// Creates a new host resource for storing values of the given type. Additionally,
     /// adds a destructor that is called when the resource is dropped. Note that multiple
     /// resource types may be created for the same `T`, and they will be distinct.
-    pub fn with_destructor<T: 'static + Send + Sync + Sized, C: AsContextMut>(
+    pub fn with_destructor<T: 'static + CondSync + Sized, C: AsContextMut>(
         mut ctx: C,
         name: Option<TypeIdentifier>,
         destructor: impl 'static
-            + Send
-            + Sync
+            + CondSync
             + Fn(StoreContextMut<'_, C::UserState, C::Engine>, T) -> Result<()>,
     ) -> Result<Self> {
         let store_id = ctx.as_context().inner.data().id;
@@ -870,7 +870,7 @@ impl ResourceType {
     }
 
     /// Determines whether this resource type can be used to extract host values of `T` from the provided store.
-    pub(crate) fn valid_for<T: 'static + Send + Sync>(&self, store_id: u64) -> bool {
+    pub(crate) fn valid_for<T: 'static + CondSync>(&self, store_id: u64) -> bool {
         if let ResourceKindValue::Host {
             type_id,
             associated_store,
