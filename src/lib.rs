@@ -2259,3 +2259,21 @@ impl HandleTable {
         Ok(self.array.remove(i as usize))
     }
 }
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+    use wasmi_runtime_layer::Engine;
+
+    fn is_normal<T: Sized + Send + Sync + Unpin>() {}
+
+    struct Data;
+
+    #[test]
+    fn test_autotraits() {
+        is_normal::<Store<Data, Engine>>();
+
+        is_normal::<StoreContextMut<'_, Data, Engine>>();
+    }
+}
